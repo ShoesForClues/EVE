@@ -39,7 +39,7 @@ local bit_not    = bit.bnot
 -------------------------------------------------------------------------------
 
 local eve={
-	version = "0.0.3"
+	version = "0.0.4"
 }
 
 -------------------------------------------------------------------------------
@@ -153,7 +153,7 @@ function map.export(map_)
 	
 end
 
-function map.import(map_,raw)
+function map.import(map_,binary)
 	
 end
 
@@ -253,14 +253,7 @@ function handler.add_voxel(handler_,x,y,z,id)
 				end
 				
 				map_:set_voxel("faces",nci,nli,neighbor_faces)
-				
-				if neighbor_faces>0 then
-					map_:set_voxel("visible",nci,nli,true)
-					map_:set_voxel("invisible",nci,nli,nil)
-				else
-					map_:set_voxel("visible",nci,nli,nil)
-					map_:set_voxel("invisible",nci,nli,true)
-				end
+				map_:set_voxel("visible",nci,nli,neighbor_faces>0 or nil)
 			end
 		end
 	end end end
@@ -269,8 +262,6 @@ function handler.add_voxel(handler_,x,y,z,id)
 	
 	if faces>0 then
 		map_:set_voxel("visible",ci,li,true)
-	else
-		map_:set_voxel("invisible",ci,li,true)
 	end
 end
 
@@ -338,14 +329,7 @@ function handler.delete_voxel(handler_,x,y,z)
 				end
 				
 				map_:set_voxel("faces",nci,nli,neighbor_faces)
-				
-				if neighbor_faces>0 then
-					map_:set_voxel("visible",nci,nli,true)
-					map_:set_voxel("invisible",nci,nli,nil)
-				else
-					map_:set_voxel("visible",nci,nli,nil)
-					map_:set_voxel("invisible",nci,nli,true)
-				end
+				map_:set_voxel("visible",nci,nli,neighbor_faces>0 or nil)
 			end
 		end
 	end end end
