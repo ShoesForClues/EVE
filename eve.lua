@@ -43,7 +43,7 @@ local bit_not    = bit.bnot
 -------------------------------------------------------------------------------
 
 local eve={
-	version = "0.0.6"
+	version = "0.0.7"
 }
 
 -------------------------------------------------------------------------------
@@ -202,12 +202,7 @@ local function dissolve_mesh(mesh)
 							mesh_a.ey = ey
 							mesh_a.ez = ez
 							
-							mesh_a.ff = mesh_a.ff or mesh_b.ff
-							mesh_a.fb = mesh_a.fb or mesh_b.fb
-							mesh_a.fl = mesh_a.fl or mesh_b.fl
-							mesh_a.fr = mesh_a.fr or mesh_b.fr
-							mesh_a.fu = mesh_a.fu or mesh_b.fu
-							mesh_a.fd = mesh_a.fd or mesh_b.fd
+							mesh_a.faces=bit_or(mesh_a.faces,mesh_b.faces)
 							
 							table_remove(mesh,b)
 						end
@@ -363,78 +358,6 @@ function handler.add_class(handler_,id,mesh_type)
 	}
 end
 
-function handler.get_faces(handler_,x,y,z)
-	local map_    = handler_.map
-	local classes = handler_.classes
-	
-	local cw = map_.chunk_width
-	local ch = map_.chunk_height
-	local cd = map_.chunk_depth
-	
-	local pw = map_.partition_width
-	local ph = map_.partition_height
-	local pd = map_.partition_depth
-	
-	local ci = position_to_chunk_id(x,y,z,cw,ch,cd,pw,pd)+1
-	local li = position_to_local_id(x,y,z,cw,ch,cd)+1
-	
-	local id = map_:get_voxel("id",ci,li)
-	
-	if not id then
-		return
-	end
-	
-	local class     = classes[id]
-	local mesh_type = class.mesh_type
-	
-	local front  = true
-	local back   = true
-	local left   = true
-	local right  = true
-	local top    = true
-	local bottom = true
-	
-	for oz=-1,1 do for oy=-1,1 do for ox=-1,1 do
-		if (
-			(ox~=0 and oy==0 and oz==0) or
-			(ox==0 and oy~=0 and oz==0) or
-			(ox==0 and oy==0 and oz~=0)
-		) then
-			local nx = x+ox
-			local ny = y+oy
-			local nz = z+oz
-			
-			local nci = position_to_chunk_id(nx,ny,nz,cw,ch,cd,pw,pd)+1
-			local nli = position_to_local_id(nx,ny,nz,cw,ch,cd)+1
-			
-			local nid = map_:get_voxel("id",nci,nli)
-			
-			if nid then
-				if (
-					classes[nid].mesh_type=="blend" or 
-					(mesh_type=="group" and id==nid)
-				) then
-					if oz==-1 then
-						front=false
-					elseif oz==1 then
-						back=false
-					elseif ox==-1 then
-						left=false
-					elseif ox==1 then
-						right=false
-					elseif oy==1 then
-						top=false
-					elseif oy==-1 then
-						bottom=false
-					end
-				end
-			end
-		end
-	end end end
-	
-	return front,back,left,right,top,bottom
-end
-
 function handler.create_chunk(handler_,cx,cy,cz,generator)
 	local map_    = handler_.map
 	local classes = handler_.classes
@@ -467,6 +390,63 @@ function handler.create_chunk(handler_,cx,cy,cz,generator)
 			map_:set_voxel(id,ci,li,true)
 		end
 	end end end
+	
+	local chunk = map_:get_chunk("id",ci)
+	
+	if not chunk then
+		return
+	end
+	
+	for li,id in pairs(chunk) do
+		local lx,ly,lz = id_to_position(li-1,cw,cd)
+		
+		local faces=0x3f --6 bits
+		
+		for oz=-1,1 do for oy=-1,1 do for ox=-1,1 do
+			if (
+				(ox~=0 and oy==0 and oz==0) or
+				(ox==0 and oy~=0 and oz==0) or
+				(ox==0 and oy==0 and oz~=0)
+			) then
+				local nx = lcx+lx+ox
+				local ny = lcy+ly+oy
+				local nz = lcz+lz+oz
+				
+				local nci = position_to_chunk_id(nx,ny,nz,cw,ch,cd,pw,pd)+1
+				local nli = position_to_local_id(nx,ny,nz,cw,ch,cd)+1
+				local nid = map_:get_voxel("id",nci,nli)
+				
+				if nid then
+					if (
+						classes[nid].mesh_type=="blend" or 
+						(classes[id].mesh_type=="group" and id==nid)
+					) then
+						faces=set_bit_face(faces,ox,oy,oz,0)
+						
+						if nci~=ci and (
+							classes[id].mesh_type=="blend" or 
+							(classes[id].mesh_type=="group" and id==nid)
+						) then
+							local nfaces=set_bit_face(
+								map_:get_voxel("visible",nci,nli) or 0x3f,
+								-ox,-oy,-oz,
+								0
+							)
+							
+							map_:set_voxel(
+								"visible",nci,nli,
+								nfaces>0 and nfaces or nil
+							)
+						end
+					end
+				end
+			end
+		end end end
+		
+		if faces>0 then
+			map_:set_voxel("visible",ci,li,faces)
+		end
+	end
 end
 
 function handler.create_voxel(handler_,x,y,z,id)
@@ -513,6 +493,8 @@ function handler.create_voxel(handler_,x,y,z,id)
 		handler_:queue_mesh(cx,cy,cz,lx,ly,lz)
 	end
 	
+	local faces = 0x3f
+	
 	for oz=-1,1 do for oy=-1,1 do for ox=-1,1 do
 		if (
 			(ox~=0 and oy==0 and oz==0) or
@@ -524,6 +506,8 @@ function handler.create_voxel(handler_,x,y,z,id)
 			local nz = z+oz
 			
 			local nci = position_to_chunk_id(nx,ny,nz,cw,ch,cd,pw,pd)+1
+			local nli = position_to_local_id(nx,ny,nz,cw,ch,cd)+1
+			local nid = map_:get_voxel("id",nci,nli)
 			
 			local ncx,ncy,ncz = id_to_position(nci-1,pw,pd)
 			
@@ -531,9 +515,38 @@ function handler.create_voxel(handler_,x,y,z,id)
 			local nly = ny%ch
 			local nlz = nz%cd
 			
+			if nid then
+				if (
+					classes[nid].mesh_type=="blend" or 
+					(classes[id].mesh_type=="group" and id==nid)
+				) then
+					faces=set_bit_face(faces,ox,oy,oz,0)
+					
+					if (
+						classes[id].mesh_type=="blend" or 
+						(classes[id].mesh_type=="group" and id==nid)
+					) then
+						local nfaces=set_bit_face(
+							map_:get_voxel("visible",nci,nli) or 0x3f,
+							-ox,-oy,-oz,
+							0
+						)
+						
+						map_:set_voxel(
+							"visible",nci,nli,
+							nfaces>0 and nfaces or nil
+						)
+					end
+				end
+			end
+			
 			handler_:queue_mesh(ncx,ncy,ncz,nlx,nly,nlz)
 		end
 	end end end
+	
+	if faces>0 then
+		map_:set_voxel("visible",ci,li,faces)
+	end
 end
 
 function handler.delete_voxel(handler_,x,y,z)
@@ -592,12 +605,25 @@ function handler.delete_voxel(handler_,x,y,z)
 			local nz = z+oz
 			
 			local nci = position_to_chunk_id(nx,ny,nz,cw,ch,cd,pw,pd)+1
+			local nli = position_to_local_id(nx,ny,nz,cw,ch,cd)+1
+			local nid = map_:get_voxel("id",nci,nli)
 			
 			local ncx,ncy,ncz = id_to_position(nci-1,pw,pd)
 			
 			local nlx = nx%cw
 			local nly = ny%ch
 			local nlz = nz%cd
+			
+			if nid then
+				map_:set_voxel(
+					"visible",nci,nli,
+					set_bit_face(
+						map_:get_voxel("visible",nci,nli) or 0x3f,
+						-ox,-oy,-oz,
+						1
+					)
+				)
+			end
 			
 			handler_:queue_mesh(ncx,ncy,ncz,nlx,nly,nlz)
 		end
@@ -660,91 +686,72 @@ function handler.create_mesh(handler_,cx,cy,cz)
 	local ci = position_to_id(cx,cy,cz,pw,pd)+1
 	
 	if meshes[ci] then
-		return meshes[ci]
+		return
 	end
 	
-	local chunk = map_:get_chunk("id",ci)
+	local chunk   = map_:get_chunk("id",ci)
+	local visible = map_:get_chunk("visible",ci)
 	
-	if not chunk then
+	if not chunk or not visible then
 		return
 	end
 	
 	local mesh={}
 	
-	--Create the initial meshes
-	for lz=0,cd-1 do for ly=0,ch-1 do
-		local boundary=nil
-		
-		for lx=0,cw-1 do
-			local li=position_to_id(lx,ly,lz,cw,cd)+1
+	--Create initial mesh
+	local appended={}
+	for li,faces in pairs(visible) do
+		if not appended[li] then
+			appended[li]=true
 			
-			local id=chunk[li]
+			local id = chunk[li]
+			local lx,ly,lz = id_to_position(li-1,cw,cd)
 			
-			if id then
-				local class=classes[id]
+			local boundary={
+				id    = id,
+				class = classes[id],
+				faces = faces,
+				sx    = lx,
+				sy    = ly,
+				sz    = lz,
+				ex    = lx,
+				ey    = ly,
+				ez    = lz
+			}
+			
+			for x=lx,0,-1 do
+				local nli    = position_to_id(x,ly,lz,cw,cd)+1
+				local nid    = chunk[nli]
+				local nfaces = visible[nli]
 				
-				local ff,fb,fl,fr,fu,fd=handler_:get_faces(
-					cx*cw+lx,
-					cy*ch+ly,
-					cz*cd+lz
-				)
-				
-				if ff or fb or fl or fr or fu or fd then
-					if boundary and boundary.id~=id then
-						mesh[#mesh+1]=boundary
-						boundary=nil
-					end
-					
-					if boundary then
-						boundary.ex = lx
-						
-						boundary.ff = ff or boundary.ff
-						boundary.fb = fb or boundary.fb
-						boundary.fl = fl or boundary.fl
-						boundary.fr = fr or boundary.fr
-						boundary.fu = fu or boundary.fu
-						boundary.fd = fd or boundary.fd
-					else
-						boundary={
-							id    = id,
-							class = class,
-							
-							sx = lx,
-							sy = ly,
-							sz = lz,
-							ex = lx,
-							ey = ly,
-							ez = lz,
-							
-							ff = ff,
-							fb = fb,
-							fl = fl,
-							fr = fr,
-							fu = fu,
-							fd = fd
-						}
-						
-						if class.mesh_type=="isolate" then
-							mesh[#mesh+1]=boundary
-							boundary=nil
-						end
-					end
-				elseif boundary then
-					mesh[#mesh+1]=boundary
-					boundary=nil
+				if nid==id and nfaces and not appended[nli] then
+					appended[nli]=true
+					boundary.faces=bit_or(boundary.faces,nfaces)
+				else
+					boundary.sx=x
+					break
 				end
-			elseif boundary then
-				mesh[#mesh+1]=boundary
-				boundary=nil
 			end
-		end
-		
-		if boundary then
+			
+			for x=lx,cw-1 do
+				local nli    = position_to_id(x,ly,lz,cw,cd)+1
+				local nid    = chunk[nli]
+				local nfaces = visible[nli]
+				
+				if nid==id and nfaces and not appended[nli] then
+					appended[nli]=true
+					boundary.faces=bit_or(boundary.faces,nfaces)
+				else
+					boundary.ex=x
+					break
+				end
+			end
+			
 			mesh[#mesh+1]=boundary
 		end
-	end end
+	end
 	
-	if not next(mesh) then
+	if not next(mesh) then --This should never run
 		return
 	end
 	
@@ -752,7 +759,7 @@ function handler.create_mesh(handler_,cx,cy,cz)
 	
 	handler_:invoke_event("mesh_created",cx,cy,cz,ci,mesh)
 	
-	return mesh,true
+	return mesh
 end
 
 function handler.delete_mesh(handler_,cx,cy,cz)
@@ -872,46 +879,34 @@ function handler.update_meshes(handler_)
 							
 							if id then
 								local class=classes[id]
-				
-								local ff,fb,fl,fr,fu,fd=handler_:get_faces(
+								
+								local faces = handler_:get_voxel_attribute(
 									cx*cw+bx,
 									cy*ch+by,
-									cz*cd+bz
+									cz*cd+bz,
+									"visible"
 								)
 								
-								if ff or fb or fl or fr or fu or fd then
+								if faces then
 									if new_boundary and new_boundary.id~=id then
 										mesh[#mesh+1]=new_boundary
 										new_boundary=nil
 									end
 									
 									if new_boundary then
-										new_boundary.ex = bx
-										
-										new_boundary.ff = ff or new_boundary.ff
-										new_boundary.fb = fb or new_boundary.fb
-										new_boundary.fl = fl or new_boundary.fl
-										new_boundary.fr = fr or new_boundary.fr
-										new_boundary.fu = fu or new_boundary.fu
-										new_boundary.fd = fd or new_boundary.fd
+										new_boundary.ex    = bx
+										new_boundary.faces = bit_or(new_boundary.faces,faces)
 									else
 										new_boundary={
 											id    = id,
 											class = class,
-											
-											sx = bx,
-											sy = by,
-											sz = bz,
-											ex = bx,
-											ey = by,
-											ez = bz,
-											
-											ff = ff,
-											fb = fb,
-											fl = fl,
-											fr = fr,
-											fu = fu,
-											fd = fd
+											faces = faces,
+											sx    = bx,
+											sy    = by,
+											sz    = bz,
+											ex    = bx,
+											ey    = by,
+											ez    = bz
 										}
 										
 										if class.mesh_type=="isolate" then
@@ -942,30 +937,24 @@ function handler.update_meshes(handler_)
 				if id then
 					local class=classes[id]
 					
-					local ff,fb,fl,fr,fu,fd=handler_:get_faces(
+					local faces = handler_:get_voxel_attribute(
 						cx*cw+lx,
 						cy*ch+ly,
-						cz*cd+lz
+						cz*cd+lz,
+						"visible"
 					)
 					
-					if ff or fb or fl or fr or fu or fd then
+					if faces then
 						mesh[#mesh+1]={
 							id    = id,
 							class = class,
-							
-							sx = lx,
-							sy = ly,
-							sz = lz,
-							ex = lx,
-							ey = ly,
-							ez = lz,
-							
-							ff = ff,
-							fb = fb,
-							fl = fl,
-							fr = fr,
-							fu = fu,
-							fd = fd
+							faces = faces,
+							sx    = lx,
+							sy    = ly,
+							sz    = lz,
+							ex    = lx,
+							ey    = ly,
+							ez    = lz
 						}
 					end
 				end
